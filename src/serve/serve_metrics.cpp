@@ -45,9 +45,9 @@ ServeMetrics::LastCompleted ServeMetrics::last_completed() const {
     return last_completed_;
 }
 
-std::string ServeMetrics::render(std::uint32_t max_concurrency,
-                                 const ninfer::RuntimeStats& live,
-                                 std::size_t active_requests) const {
+std::string ServeMetrics::render(std::uint32_t max_concurrency, const ninfer::RuntimeStats& live,
+                                 std::size_t active_requests,
+                                 const ServerEnergyTotals& energy) const {
     const std::lock_guard<std::mutex> lock(mutex_);
     const std::uint64_t in_flight  = active_requests;
     const std::uint64_t processing = std::min<std::uint64_t>(in_flight, max_concurrency);
@@ -63,6 +63,19 @@ std::string ServeMetrics::render(std::uint32_t max_concurrency,
     append_counter(out, "ninfer:prefix_cache_hit_tokens_total", prefix_cache_hit_tokens_total_);
     append_counter(out, "ninfer:draft_tokens_total", speculative_draft_tokens_total_);
     append_counter(out, "ninfer:draft_accepted_tokens_total", speculative_accepted_tokens_total_);
+    // Energy is exported as counters, never as a joules-per-token gauge. The denominators are
+    // already here (llamacpp:prompt_tokens_total and llamacpp:tokens_predicted_total), so a
+    // scraper divides two rates over a window it chose; a gauge computed here would fix that
+    // window and would average incorrectly when aggregated.
+    if (energy.available) {
+        append_counter(out, "ninfer:board_energy_joules_total", energy.board_joules_total);
+        append_counter(out, "ninfer:board_idle_watts", energy.idle_watts);
+        append_counter(out, "ninfer:prefill_energy_joules_total", live.prefill_energy_joules);
+        append_counter(out, "ninfer:decode_energy_joules_total", live.decode_energy_joules);
+        append_counter(out, "ninfer:energy_accounted_seconds_total",
+                       live.energy_accounted_seconds);
+        append_counter(out, "ninfer:energy_samples_total", live.energy_samples);
+    }
     return out;
 }
 

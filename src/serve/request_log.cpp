@@ -25,6 +25,60 @@
 
 namespace ninfer::serve {
 
+// Reconcile the executor's per-unit power integration against the board's own energy counter.
+//
+// The counter is exact; the split is not, because the board refreshes power at roughly 50 Hz and
+// a decode round is shorter than that. Time no execution unit claimed is priced at the measured
+// idle baseline, and whatever remains is reported as a residual so a consumer can decide whether
+// the split is trustworthy instead of being handed a number with its error hidden inside it.
+IntervalEnergy reconcile_interval_energy(const ninfer::RuntimeStats& previous,
+                                         const ninfer::RuntimeStats& current,
+                                         double interval_seconds,
+                                         const BoardEnergySample& board_energy) {
+    IntervalEnergy energy;
+    if (!board_energy.available || interval_seconds <= 0.0) { return energy; }
+    const auto monotonic_double = [](double before, double after) {
+        return after >= before ? after - before : after;
+    };
+    energy.available         = true;
+    energy.board_joules      = board_energy.joules;
+    energy.prefill_joules    = monotonic_double(previous.prefill_energy_joules,
+                                                current.prefill_energy_joules);
+    energy.decode_joules     = monotonic_double(previous.decode_energy_joules,
+                                                current.decode_energy_joules);
+    energy.accounted_seconds = monotonic_double(previous.energy_accounted_seconds,
+                                                current.energy_accounted_seconds);
+    energy.idle_watts        = board_energy.idle_watts;
+
+    const double unaccounted_seconds =
+        std::max(0.0, interval_seconds - energy.accounted_seconds);
+    energy.idle_joules = energy.idle_watts * unaccounted_seconds;
+    energy.residual_joules =
+        energy.board_joules - energy.prefill_joules - energy.decode_joules - energy.idle_joules;
+    energy.residual_fraction =
+        energy.board_joules > 0.0 ? energy.residual_joules / energy.board_joules : 0.0;
+    return energy;
+}
+
+ThroughputReport make_throughput_report(const ninfer::RuntimeStats& previous,
+                                        const ninfer::RuntimeStats& current,
+                                        double interval_seconds,
+                                        const BoardEnergySample& board_energy) {
+    return ThroughputReport{
+        .interval_seconds = interval_seconds,
+        .computed_prefill_tokens =
+            current.computed_prefill_tokens - previous.computed_prefill_tokens,
+        .committed_decode_tokens =
+            current.committed_decode_tokens - previous.committed_decode_tokens,
+        .decode_rounds     = current.decode_rounds - previous.decode_rounds,
+        .decode_row_rounds = current.decode_row_rounds - previous.decode_row_rounds,
+        .energy            = reconcile_interval_energy(previous, current, interval_seconds,
+                                                       board_energy),
+        .previous          = previous,
+        .current           = current,
+    };
+}
+
 std::uint64_t unix_time_ms() {
     const auto now = std::chrono::system_clock::now().time_since_epoch();
     return static_cast<std::uint64_t>(
@@ -623,6 +677,45 @@ std::string format_request_error_json(const std::string& server_instance_id,
     return record.dump();
 }
 
+// Joules per token, or null where the denominator is zero. A rate over no tokens is not zero
+// energy per token, it is no measurement, and the two must not render the same.
+Json joules_per_token(double joules, std::uint64_t tokens) {
+    if (tokens == 0) { return Json(nullptr); }
+    return joules / static_cast<double>(tokens);
+}
+
+// Energy is reported per token rather than tokens per joule because energy composes additively
+// across phases and rates do not: prefill and decode joules-per-token can be summed against their
+// own token counts, whereas averaging tokens-per-joule would need a harmonic mean and silently
+// gives the wrong answer when it is done arithmetically.
+Json energy_json(const ThroughputReport& report) {
+    const IntervalEnergy& energy = report.energy;
+    if (!energy.available) { return Json(nullptr); }
+    const std::uint64_t total_tokens =
+        report.computed_prefill_tokens + report.committed_decode_tokens;
+    // `served` prices every joule the board drew, including the idle draw between requests, which
+    // is what an operator actually pays. `active` removes the measured idle baseline and is the
+    // figure that tracks the schedule rather than the duty cycle. They differ by a large factor on
+    // a mostly-idle server, so both are published instead of one standing in for the other.
+    return Json{{"board_joules", energy.board_joules},
+                {"prefill_joules", energy.prefill_joules},
+                {"decode_joules", energy.decode_joules},
+                {"idle_joules", energy.idle_joules},
+                {"idle_watts", energy.idle_watts},
+                {"accounted_seconds", energy.accounted_seconds},
+                {"residual_joules", energy.residual_joules},
+                {"residual_fraction", energy.residual_fraction},
+                {"joules_per_token",
+                 Json{{"served", joules_per_token(energy.board_joules, total_tokens)},
+                      {"active", joules_per_token(energy.board_joules - energy.idle_joules,
+                                                  total_tokens)},
+                      {"prefill", joules_per_token(energy.prefill_joules,
+                                                   report.computed_prefill_tokens)},
+                      {"decode", joules_per_token(energy.decode_joules,
+                                                   report.committed_decode_tokens)}}}};
+}
+
+
 std::string format_throughput_json(const std::string& server_instance_id, std::uint64_t timestamp,
                                    const ThroughputReport& report) {
     Json record                          = event_base(server_instance_id, timestamp, "throughput");
@@ -649,6 +742,9 @@ std::string format_throughput_json(const std::string& server_instance_id, std::u
                                            {"committed_decode", report.committed_decode_tokens}};
     record["throughput_tokens_per_second"] =
         Json{{"prefill", prefill_rate}, {"decode", decode_rate}};
+    // Null on boards with no cumulative energy counter, so a replayed log distinguishes "this
+    // server could not measure energy" from "this server used none".
+    record["energy"] = energy_json(report);
     record["scheduler"]    = Json{{"running", current.running_requests},
                                   {"prefilling", current.prefilling_requests},
                                   {"decode_ready", current.decode_ready_requests},

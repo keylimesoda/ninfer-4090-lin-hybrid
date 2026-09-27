@@ -22,7 +22,8 @@ the shared Main Text KV pool follows the example's 32,768-token `--max-context`.
 
 Answer content is streamed to stdout. Human-readable startup milestones and runtime errors are
 written to stderr without service timestamps. Reasoning and the CLI result report (timings,
-throughput, GPU memory, token IDs when requested, and speculative-decoding statistics) also use
+throughput, board energy, GPU memory, token IDs when requested, and speculative-decoding
+statistics) also use
 stderr as unprefixed product output, so stdout can be redirected independently. On a terminal,
 weight materialization is one transient progress line followed by a compact Engine-ready summary.
 Redirected stderr contains persistent readable progress for long loads and no carriage returns or
@@ -241,6 +242,27 @@ Repeat `--stop-token-id`, `--stop`, or `--reasoning-stop` to add stop conditions
 generated token IDs in diagnostics.
 
 Run `./build/apps/ninfer --help` for the exact option contract.
+
+## Energy
+
+The summary reports `board energy` for the request plus `energy per token`, the same figure
+restated as `energy per 1M tokens` in watt-hours, and a `prefill` and `decode` split in joules
+per token. A watt-second is a joule, so tokens per watt-second and tokens per joule are the same
+figure; energy is reported per token because it composes additively across phases while a rate
+does not. The per-million restatement is an exact rescale by `1e6/3600` into the denominator
+inference is priced in, so multiplying it by a local electricity rate gives a number comparable
+to a published $/1M-token price.
+
+The total is the board's own cumulative energy counter, read either side of the request, so it is
+exact. The phase split is integrated from instantaneous power at execution-unit boundaries and is
+an estimate; `energy unattributed` is the share of the measured total it does not account for.
+Prefill divides by tokens actually prefilled, so reused prompt tokens do not flatter it.
+
+These lines are omitted on a board with no cumulative energy counter, which many GeForce parts
+lack. Per-request energy is exact here only because the CLI runs one request at a time; board
+energy is a property of the device, so the server reports it per interval instead. It is also
+board energy, not system energy: the CPU, the rest of the platform, and power-supply losses are
+excluded.
 
 ## Context and memory
 

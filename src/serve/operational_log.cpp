@@ -386,6 +386,30 @@ OperationalRecord render_throughput(const ThroughputReport& report) {
         report.interval_seconds > 0.0 ? host_seconds / report.interval_seconds : 0.0;
     out << " | host " << product::format_pretty_percent(host_ratio) << " ("
         << product::format_pretty_duration(host_seconds) << ')';
+    if (report.energy.available) {
+        out << " energy=" << std::setprecision(1) << report.energy.board_joules << "J idle="
+            << report.energy.idle_watts << 'W';
+        out << " prefill_energy=";
+        if (report.computed_prefill_tokens != 0) {
+            out << std::setprecision(3)
+                << report.energy.prefill_joules /
+                       static_cast<double>(report.computed_prefill_tokens)
+                << "J/tok";
+        } else {
+            out << "n/a";
+        }
+        out << " decode_energy=";
+        if (report.committed_decode_tokens != 0) {
+            out << std::setprecision(3)
+                << report.energy.decode_joules /
+                       static_cast<double>(report.committed_decode_tokens)
+                << "J/tok";
+        } else {
+            out << "n/a";
+        }
+        out << " energy_residual=" << std::setprecision(1)
+            << (report.energy.residual_fraction * 100.0) << '%';
+    }
     return {.severity = OperationalSeverity::Info, .message = out.str()};
 }
 

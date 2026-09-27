@@ -4,6 +4,7 @@
 
 #include "core/device.h"
 #include "core/nvtx.h"
+#include "core/power_meter.h"
 #include "ninfer/types.h"
 #include "runtime/contract/types.h"
 #include "runtime/engine/request_record.h"
@@ -77,7 +78,8 @@ public:
                      options.context_cache.max_shared_prefixes.value(),
                      options.context_cache.enabled,
                      options.context_cache.max_long_anchors_per_continuation.value_or(0),
-                     std::move(context_cost)) {
+          std::move(context_cost)),
+          power_meter_(device.device) {
         if (max_concurrency_ == 0 || max_concurrency_ > kMaximumConcurrency ||
             options.max_pending_requests == 0 || pending_timeout_.count() <= 0) {
             throw std::invalid_argument("Engine core bounds are invalid");
@@ -1682,6 +1684,28 @@ private:
         progress.pending.reset();
     }
 
+    // One instantaneous board-power read, or nullopt where the board exposes none. Measured at
+    // ~0.5 us mean / 0.8 us p99 on an RTX 4090, against execution units that cost tens of
+    // milliseconds, so bracketing every unit with two reads is free at this scale.
+    [[nodiscard]] std::optional<double> sample_board_watts() const {
+        return power_meter_.instant_watts();
+    }
+
+    // Charge [started, ended] to a phase accumulator. Both endpoint samples are boundary reads and
+    // units run back to back, so the trapezoid rule integrates continuously across a busy period:
+    // the closing sample of one unit is taken at essentially the same moment as the opening sample
+    // of the next. Time outside a unit bracket is deliberately not charged to any phase.
+    void accumulate_phase_energy(double& accumulator, const std::optional<double>& opening_watts,
+                                 const std::optional<double>& closing_watts,
+                                 Clock::time_point started, Clock::time_point ended) {
+        if (!opening_watts || !closing_watts) { return; }
+        const double seconds = std::chrono::duration<double>(ended - started).count();
+        if (seconds <= 0.0) { return; }
+        accumulator += 0.5 * (*opening_watts + *closing_watts) * seconds;
+        cumulative_stats_.energy_accounted_seconds += seconds;
+        ++cumulative_stats_.energy_samples;
+    }
+
     void run_prefill_step(const std::array<bool, kMaximumConcurrency>& cancelled_at_unit_start) {
         nvtx::ScopedRange prefill_range(nvtx::Name::Prefill, nvtx::Category::Prefill);
         EnginePhaseScope setup(*this, EngineHostPhase::CommitOutput);
@@ -1698,10 +1722,15 @@ private:
         setup.finish();
         ProgramCallScope program_call(*this);
         const Clock::time_point prefill_started = Clock::now();
+        const auto opening_watts                = sample_board_watts();
         auto progress =
             instance_.program->advance_prefill(*request->sequence, &program_call.failed_timing());
+        const Clock::time_point prefill_ended = Clock::now();
+        const auto closing_watts              = sample_board_watts();
         cumulative_stats_.prefill_seconds_total +=
-            std::chrono::duration<double>(Clock::now() - prefill_started).count();
+            std::chrono::duration<double>(prefill_ended - prefill_started).count();
+        accumulate_phase_energy(cumulative_stats_.prefill_energy_joules, opening_watts,
+                                closing_watts, prefill_started, prefill_ended);
         program_call.finish(progress.timing);
         resolve_prefill_progress(request, std::move(progress), cancelled_at_unit_start);
         publish_runtime_stats();
@@ -2116,10 +2145,15 @@ private:
                                        static_cast<std::uint64_t>(membership.size));
         ProgramCallScope program_call(*this);
         const Clock::time_point decode_started = Clock::now();
+        const auto opening_watts               = sample_board_watts();
         auto pending = instance_.program->decode(
             membership.sequence_span(), membership.budget_span(), &program_call.failed_timing());
+        const Clock::time_point decode_ended = Clock::now();
+        const auto closing_watts             = sample_board_watts();
         cumulative_stats_.decode_seconds_total +=
-            std::chrono::duration<double>(Clock::now() - decode_started).count();
+            std::chrono::duration<double>(decode_ended - decode_started).count();
+        accumulate_phase_energy(cumulative_stats_.decode_energy_joules, opening_watts,
+                                closing_watts, decode_started, decode_ended);
         program_call.finish(pending.execution_timing());
         commit_pending(std::move(pending), membership.lane_span(), true, cancelled_at_unit_start);
         publish_runtime_stats();
@@ -2395,6 +2429,11 @@ private:
     const std::chrono::milliseconds pending_timeout_;
     const bool context_cache_enabled_;
     ResourceManagement resources_;
+
+    // Read only from the execution thread, at execution-unit boundaries. The expensive cumulative
+    // energy counter is deliberately never read here: it costs milliseconds and would land on the
+    // thread whose latency this engine exists to protect. An interval observer samples that.
+    core::PowerMeter power_meter_;
 
     mutable std::mutex execution_mutex_;
     mutable std::mutex queue_mutex_;

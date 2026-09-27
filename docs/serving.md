@@ -894,7 +894,7 @@ in append mode and flushes every event, so successive model or MTP blocks may sh
 file. The parent directory must already exist. Failure to open the file aborts startup; the log path
 is also rejected if it resolves to the model artifact.
 
-Every line is one `ninfer_serve_request_log` schema-v20 JSON object. All events carry
+Every line is one `ninfer_serve_request_log` schema-v21 JSON object. All events carry
 `timestamp_unix_ms` and a process-unique `server_instance_id`; request IDs are monotonic only within
 that server instance. Successful request-start records include request-scoped acquisition,
 media-preprocessing wall/work, tokenizer, cache hit/miss/single-flight, and payload-size fields;
@@ -907,7 +907,7 @@ they do not infer request behavior from process-global counter deltas.
 | `request_rejected` | parsed request shape, requested reasoning effort with unresolved effective value, media-item count, `phase: "prepare"`, and the exact HTTP status/type/code/parameter/message for a synchronous preparation rejection |
 | `request_done` | finish reason, prompt/completion/cache/computed-prefill tokens, prefix reuse path, tool-call parse diagnostics, request-owned materialization cost/search diagnostics, thinking-budget application counters, unrounded request-stage seconds, per-request Engine Host exposure, and complete speculative-decoding counters |
 | `request_error` | the resolved request configuration and the generation, cancellation, or pre-outcome transport terminal message |
-| `throughput` | interval token/decode/context-cache pressure counter deltas, authoritative worker Host-work deltas, current scheduler/resource gauges, and decode-round batch statistics |
+| `throughput` | interval token/decode/context-cache pressure counter deltas, board energy, authoritative worker Host-work deltas, current scheduler/resource gauges, and decode-round batch statistics |
 
 `requested_reasoning_effort` is the client value or `null` when omitted.
 `resolved_reasoning_effort` is `none`, a native effort tier, or `null` when thinking is enabled but
@@ -979,6 +979,54 @@ complete measurement analysis.
 Intervals with context materialization or retention activity are retained even when they contain no
 token execution; only fully idle intervals are omitted. Downstream measurement should prefer the
 raw counters and seconds over rounded stderr rates.
+
+### Energy
+
+The throughput `energy` object reports the interval's board energy, or `null` where the GPU
+exposes no cumulative energy counter. Many GeForce boards do not implement one; `null` means the
+server could not measure energy, which is not the same as measuring none, so it is never reported
+as zero.
+
+`board_joules` is measured by the board itself and is exact. `prefill_joules` and `decode_joules`
+are estimates: the executor brackets every execution unit with two instantaneous board-power reads
+and integrates trapezoidally, because the cumulative counter costs milliseconds to read and
+advances in roughly 100 ms steps, which is coarser than a decode round. `idle_joules` prices the
+part of the interval that no execution unit claimed at `idle_watts`, itself measured over
+intervals during which nothing ran and nothing was queued. `residual_joules` and
+`residual_fraction` are what those three together fail to explain. The residual is published
+rather than distributed into a phase, so a consumer can see the estimator's error instead of
+inheriting it silently.
+
+`joules_per_token` carries four derived figures. `served` divides all board energy by all tokens,
+including the idle draw between requests, and is what the work costs; it degrades on a mostly idle
+server even when nothing about the engine changed. `active` removes the idle baseline and tracks
+the schedule rather than the duty cycle. `prefill` divides prefill energy by computed prefill
+tokens, so prefix-cache hits do not flatter the kernels. `decode` divides decode energy by
+committed decode tokens, which under MTP counts accepted tokens only — that is where
+speculation shows up as a net energy win or loss. Any of the four is `null` when its denominator
+is zero.
+
+A watt-second is a joule, so tokens per watt-second and tokens per joule are the same quantity.
+Energy is reported per token rather than as a rate because energy composes additively across
+phases and a rate does not: joules-per-token figures can be combined against their own token
+counts, whereas averaging tokens-per-joule arithmetically is wrong.
+
+The record carries only joules per token. The per-million-token restatement the dashboard and CLI
+also display is an exact rescale by `1e6/3600` into watt-hours, and is derived at display rather
+than stored: it is the denominator inference is priced in, so multiplying it by a local
+electricity rate gives a figure comparable to a published $/1M-token price, but it is the same
+measurement and carrying both in the schema would be redundancy that can drift.
+
+`GET /metrics` exports energy as counters only — `ninfer:board_energy_joules_total`,
+`ninfer:prefill_energy_joules_total`, `ninfer:decode_energy_joules_total`,
+`ninfer:energy_accounted_seconds_total`, `ninfer:energy_samples_total`, and the
+`ninfer:board_idle_watts` gauge. The token denominators are already exported, so a scraper
+divides two rates over a window it chose; the series are omitted entirely on a board with no
+counter. `ninfer:board_energy_joules_total` counts energy since this server started, not since
+driver load, and a driver-reload counter reset drops one difference rather than corrupting the
+total. `GET /telemetry` additionally reports the raw board counter as `gpu.energy_joules_total`,
+the server-scoped total as `gpu.server_energy_joules`, and the calibrated idle baseline as
+`gpu.idle_watts`.
 
 ## Execution behavior
 

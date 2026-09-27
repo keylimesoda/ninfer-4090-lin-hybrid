@@ -20,7 +20,7 @@ class logger;
 
 namespace ninfer::serve {
 
-inline constexpr int kRequestLogSchemaVersion        = 20;
+inline constexpr int kRequestLogSchemaVersion        = 21;
 inline constexpr const char* kRequestLogArtifactType = "ninfer_serve_request_log";
 
 struct ServerLogEnvironment {
@@ -58,6 +58,11 @@ std::string format_request_error_json(const std::string& server_instance_id,
                                       const RequestLogContext& context, const std::string& message);
 std::string format_throughput_json(const std::string& server_instance_id,
                                    std::uint64_t timestamp_unix_ms, const ThroughputReport& report);
+
+ThroughputReport make_throughput_report(const ninfer::RuntimeStats& previous,
+                                        const ninfer::RuntimeStats& current,
+                                        double interval_seconds,
+                                        const BoardEnergySample& board_energy = {});
 
 ServerLogEnvironment query_server_log_environment(int device);
 
