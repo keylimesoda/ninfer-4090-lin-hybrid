@@ -99,7 +99,7 @@ EXPOSE 8080
 STOPSIGNAL SIGTERM
 VOLUME ["/var/cache/ninfer"]
 
-# Production configuration for one RTX 4090 running Qwen3.8-27B. The request log is what makes
-# a later dashboard replay possible; --web-dir serves the built dashboard at the server's root,
-# same-origin with /telemetry and /events.
-CMD ["ninfer-serve", "/opt/ninfer/models/qwen3_8_27b.ninfer", "--model-id", "qwen3.8-27b", "--host", "0.0.0.0", "--port", "8080", "--max-context", "262144", "--kv-capacity", "262144", "--kv-dtype", "rk4v4-e8", "--max-concurrency", "4", "--max-pending-requests", "16", "--prefill-chunk", "1024", "--spec", "mtp", "--draft-tokens", "3", "--lm-head-draft", "--preserve-thinking", "--log-stats-interval-ms", "1000", "--request-log-jsonl", "/var/cache/ninfer/request-log.jsonl", "--web-dir", "/opt/ninfer/web"]
+# Mirrors the production 4090 command line, fork-only continuation-cache flags removed, with the
+# request log (so a later dashboard replay exists) and --web-dir (the dashboard at the server
+# root, same-origin with /telemetry and /events).
+CMD ["ninfer-serve", "/opt/ninfer/models/qwen3_8_27b.ninfer", "--model-id", "qwen3.8-27b", "--host", "0.0.0.0", "--port", "8080", "--max-context", "262144", "--kv-capacity", "262144", "--max-concurrency", "1", "--max-pending-requests", "16", "--pending-timeout-ms", "600000", "--prefill-chunk", "1024", "--kv-dtype", "rk4v4-e8", "--spec", "mtp", "--draft-tokens", "3", "--lm-head-draft", "--no-cuda-graph", "--vision", "--preserve-thinking", "--request-log-jsonl", "/var/cache/ninfer/request-log.jsonl", "--web-dir", "/opt/ninfer/web"]

@@ -33,6 +33,7 @@ The executable `--help` output is the exact source for command-line option spell
 - [Tests](../tests/README.md)
 - [Maintainer tools](../tools/README.md)
 - [Capability evaluation](../eval/README.md)
+- [Hybrid port report and cutover](hybrid-cutover.md)
 
 ## Maintainer references
 
