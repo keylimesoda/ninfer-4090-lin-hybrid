@@ -1,13 +1,16 @@
 #include "serve/operational_log.h"
+#include "serve/event_stream.h"
 #include "serve/request_log.h"
 
 #include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -37,7 +40,7 @@ int main() {
 
     bool protected_artifact_rejected = false;
     try {
-        JsonlRequestLog unsafe("same-path.ninfer", "same-path.ninfer");
+        EventStream unsafe("same-path.ninfer", "same-path.ninfer", 8);
     } catch (const std::invalid_argument&) { protected_artifact_rejected = true; }
     failures += check(protected_artifact_rejected,
                       "request log accepted the model artifact as its output path");
@@ -693,14 +696,42 @@ int main() {
 #endif
          ".jsonl");
     std::filesystem::remove(log_path);
+    // One formatted record must reach both sinks. A live /events reader and a post-hoc reader of
+    // the JSONL file are required to see byte-identical lines, which is what lets the dashboard
+    // replay a file through the same code path it uses for the stream.
+    std::string streamed_start;
+    std::string streamed_rejected;
+    std::string streamed_error;
     {
-        JsonlRequestLog writer(log_path.string());
-        writer.write_request_start(context);
+        EventStream stream(log_path.string(), {}, 8);
+        std::vector<std::string> backlog;
+        std::shared_ptr<EventSubscriber> reader = stream.subscribe(backlog);
+        failures += check(backlog.empty(), "a fresh stream replayed records that were never sent");
+        stream.emit_request_start(context);
+        failures += check(reader->next(streamed_start, std::chrono::milliseconds(1000)),
+                          "subscriber did not receive the emitted request_start");
+        stream.emit_request_rejected(rejected_context);
+        failures += check(reader->next(streamed_rejected, std::chrono::milliseconds(1000)),
+                          "subscriber did not receive the emitted request_rejected");
+
+        // A second reader must be replayed what it missed, so a dashboard opened mid-run renders
+        // without waiting for the next record.
+        std::vector<std::string> late_backlog;
+        std::shared_ptr<EventSubscriber> late = stream.subscribe(late_backlog);
+        failures += check(late_backlog.size() == 2 && late_backlog.front() == streamed_start &&
+                              late_backlog.back() == streamed_rejected,
+                          "late subscriber was not replayed the retained records");
+        stream.unsubscribe(late);
+        stream.unsubscribe(reader);
     }
     {
-        JsonlRequestLog writer(log_path.string());
-        writer.write_request_rejected(rejected_context);
-        writer.write_request_error(context, "generation failed");
+        EventStream stream(log_path.string(), {}, 8);
+        std::vector<std::string> backlog;
+        std::shared_ptr<EventSubscriber> reader = stream.subscribe(backlog);
+        stream.emit_request_error(context, "generation failed");
+        failures += check(reader->next(streamed_error, std::chrono::milliseconds(1000)),
+                          "subscriber did not receive the emitted request_error");
+        stream.unsubscribe(reader);
     }
     std::ifstream input(log_path);
     std::string first_line;
@@ -721,6 +752,11 @@ int main() {
                           "second appended event mismatch");
         failures += check(Json::parse(third_line).at("event") == "request_error",
                           "third appended event mismatch");
+    }
+    if (!first_line.empty() && !second_line.empty() && !third_line.empty()) {
+        failures += check(first_line == streamed_start && second_line == streamed_rejected &&
+                              third_line == streamed_error,
+                          "streamed records differ from the appended JSONL lines");
     }
     input.close();
     std::filesystem::remove(log_path);

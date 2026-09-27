@@ -24,20 +24,13 @@
 #endif
 
 namespace ninfer::serve {
-namespace {
-
-using Json = nlohmann::json;
-
-template <class T>
-T monotonic_delta(T previous, T current) noexcept {
-    return current >= previous ? current - previous : T{};
-}
 
 std::uint64_t unix_time_ms() {
     const auto now = std::chrono::system_clock::now().time_since_epoch();
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
 }
+
 
 std::string new_server_instance_id() {
     const auto now    = std::chrono::system_clock::now().time_since_epoch();
@@ -49,6 +42,15 @@ std::string new_server_instance_id() {
 #endif
     return "serve-" + std::to_string(static_cast<long long>(process_id)) + '-' +
            std::to_string(micros);
+}
+
+namespace {
+
+using Json = nlohmann::json;
+
+template <class T>
+T monotonic_delta(T previous, T current) noexcept {
+    return current >= previous ? current - previous : T{};
 }
 
 std::filesystem::path normalized_absolute_path(const std::string& value) {
@@ -844,57 +846,14 @@ JsonlRequestLog::JsonlRequestLog(const std::string& path,
         normalized_absolute_path(path_) == normalized_absolute_path(protected_artifact_path)) {
         throw std::invalid_argument("request JSONL log must not overwrite the model artifact");
     }
-    server_instance_id_ = new_server_instance_id();
     output_.open(path_, std::ios::out | std::ios::app);
     if (!output_) {
         throw std::runtime_error("failed to open request JSONL log for append: " + path_);
     }
 }
 
-void JsonlRequestLog::write_server_start(const ServeOptions& options,
-                                         const ninfer::EngineOptions& engine_options,
-                                         const ninfer::ModelSamplingDefaults& sampling_defaults,
-                                         const std::string& public_model_id,
-                                         const ninfer::LoadSummary& load,
-                                         const ninfer::MemorySummary& memory) {
+void JsonlRequestLog::write_record(const std::string& record) {
     if (!enabled()) { return; }
-    std::error_code error;
-    const std::uintmax_t size = std::filesystem::file_size(options.artifact_path, error);
-    const std::optional<std::uint64_t> artifact_size =
-        error ? std::nullopt : std::optional<std::uint64_t>(size);
-    append(format_server_start_json(server_instance_id_, unix_time_ms(), options, engine_options,
-                                    sampling_defaults, public_model_id, load, memory,
-                                    query_server_log_environment(options.device), artifact_size));
-}
-
-void JsonlRequestLog::write_request_start(const RequestLogContext& context) {
-    if (!enabled()) { return; }
-    append(format_request_start_json(server_instance_id_, unix_time_ms(), context));
-}
-
-void JsonlRequestLog::write_request_rejected(const RequestRejectionLogContext& context) {
-    if (!enabled()) { return; }
-    append(format_request_rejected_json(server_instance_id_, unix_time_ms(), context));
-}
-
-void JsonlRequestLog::write_request_done(const RequestLogContext& context,
-                                         const GenerationOutcome& outcome) {
-    if (!enabled()) { return; }
-    append(format_request_done_json(server_instance_id_, unix_time_ms(), context, outcome));
-}
-
-void JsonlRequestLog::write_request_error(const RequestLogContext& context,
-                                          const std::string& message) {
-    if (!enabled()) { return; }
-    append(format_request_error_json(server_instance_id_, unix_time_ms(), context, message));
-}
-
-void JsonlRequestLog::write_throughput(const ThroughputReport& report) {
-    if (!enabled()) { return; }
-    append(format_throughput_json(server_instance_id_, unix_time_ms(), report));
-}
-
-void JsonlRequestLog::append(std::string record) {
     bool report_failure = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);

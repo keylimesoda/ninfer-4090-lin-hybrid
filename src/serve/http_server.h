@@ -1,6 +1,8 @@
 #pragma once
 
+#include "serve/event_stream.h"
 #include "serve/generation_service.h"
+#include "serve/gpu_telemetry.h"
 #include "serve/operational_log.h"
 #include "serve/openai_responses_store.h"
 #include "serve/request_log.h"
@@ -89,6 +91,8 @@ private:
     void handle_models(const httplib::Request& req, httplib::Response& res) const;
     void handle_model(const httplib::Request& req, httplib::Response& res) const;
     void handle_slot_action(const httplib::Request& req, httplib::Response& res);
+    void handle_telemetry(const httplib::Request& req, httplib::Response& res) const;
+    void handle_events(const httplib::Request& req, httplib::Response& res);
 
     void record_request_start(const RequestLogContext& context);
     void record_request_rejected(const RequestRejectionLogContext& context);
@@ -109,7 +113,9 @@ private:
     // initialisation order matching the declaration order.
     std::shared_ptr<spdlog::logger> logger_;
     OperationalLog operational_log_;
-    JsonlRequestLog request_jsonl_;
+    EventStream events_;
+    GpuTelemetryReader gpu_;
+    std::chrono::steady_clock::time_point started_at_ = std::chrono::steady_clock::now();
     httplib::Server server_;
     std::atomic<std::uint64_t> request_seq_{0};
     std::mutex stats_mutex_;
