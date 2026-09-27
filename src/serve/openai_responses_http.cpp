@@ -271,7 +271,8 @@ void HttpServer::handle_responses(const httplib::Request& req, httplib::Response
         prepared = service_->prepare(
             resolved.generation,
             request.stream ? GenerationConsumerMode::Streaming : GenerationConsumerMode::Aggregate,
-            {}, [&req] { return client_disconnected(req); }, std::move(resolved.cache_hints));
+            GenerationObservationOptions{.prompt_progress = request.stream},
+            [&req] { return client_disconnected(req); }, std::move(resolved.cache_hints));
     } catch (const ApiException& exception) {
         const ApiError error = responses_error(exception.error());
         record_request_rejected(make_request_rejection_log_context(
@@ -417,6 +418,11 @@ void HttpServer::handle_responses(const httplib::Request& req, httplib::Response
                     output.on_content = [&](const std::string& text) {
                         render_and_write(transport,
                                          [&] { return stream->encoder->content_delta(text); });
+                    };
+                    output.on_progress = [&](const ninfer::PromptProgress& progress) {
+                        render_and_write(
+                            transport,
+                            [&] { return stream->encoder->prompt_progress(progress); });
                     };
                     output.is_cancelled = [&] { return transport.poll(); };
 

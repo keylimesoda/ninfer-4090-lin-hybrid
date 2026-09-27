@@ -947,6 +947,55 @@ int test_sse_sequence_and_failures() {
     return failures;
 }
 
+int test_prompt_progress_events() {
+    OpenAIResponsesCreateRequest request = parse_openai_responses_create_request(
+        Json{{"model", "m"}, {"input", "hello"}, {"stream", true}}, limits());
+    OpenAIResponsesEventStream encoder("resp_progress", 123, request, {});
+    int failures = 0;
+
+    const ninfer::PromptProgress before{.total_prompt_tokens  = 100,
+                                        .reused_prompt_tokens = 8,
+                                        .processed_prompt_tokens = 8,
+                                        .elapsed_ns                  = 0};
+    failures += check(encoder.prompt_progress(before).empty(),
+                      "prompt progress is suppressed before the stream starts");
+
+    const std::vector<std::string> started = encoder.start();
+    const ninfer::PromptProgress update{.total_prompt_tokens     = 100,
+                                        .reused_prompt_tokens    = 8,
+                                        .processed_prompt_tokens = 40,
+                                        .elapsed_ns              = 150'000'000};
+    const std::vector<std::string> frames = encoder.prompt_progress(update);
+    failures += check(frames.size() == 1, "one frame per published prefill update");
+    if (!frames.empty()) {
+        const Json payload = parse_event(frames.front());
+        failures += check(payload.at("type") == "response.in_progress" &&
+                              payload.at("response").at("status") == "in_progress" &&
+                              payload.at("prompt_progress").at("total") == 100 &&
+                              payload.at("prompt_progress").at("cache") == 8 &&
+                              payload.at("prompt_progress").at("processed") == 40 &&
+                              payload.at("prompt_progress").at("time_ms") == 150 &&
+                              payload.at("sequence_number") == std::uint64_t(started.size()),
+                          "progress reuses response.in_progress with prefill counters");
+    }
+
+    bool regressed = false;
+    try {
+        (void)encoder.prompt_progress(ninfer::PromptProgress{.total_prompt_tokens = 100,
+                                                             .reused_prompt_tokens = 8,
+                                                             .processed_prompt_tokens = 12,
+                                                             .elapsed_ns = 200'000'000});
+    } catch (const std::logic_error&) {
+        regressed = true;
+    }
+    failures += check(regressed, "a regressed prefill counter is a stream invariant violation");
+
+    (void)encoder.finish(sample_outcome());
+    failures += check(encoder.prompt_progress(update).empty(),
+                      "prompt progress is suppressed once the stream is finished");
+    return failures;
+}
+
 int test_input_tokens_uses_shared_state_path() {
     OpenAIResponsesStore store(8, 1ULL << 20);
     store.put(stored_parent(
@@ -996,6 +1045,7 @@ int main() {
     failures += test_previous_response_call_graph();
     failures += test_response_object();
     failures += test_sse_sequence_and_failures();
+    failures += test_prompt_progress_events();
     failures += test_input_tokens_uses_shared_state_path();
     if (failures == 0) { std::cout << "ok\n"; }
     return failures == 0 ? 0 : 1;

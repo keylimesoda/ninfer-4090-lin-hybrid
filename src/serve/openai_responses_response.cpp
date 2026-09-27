@@ -318,20 +318,23 @@ public:
     }
 
     std::string id;
-    std::int64_t created_at = 0;
+    std::int64_t created_at                 = 0;
     OpenAIResponsesCreateRequest request;
     OpenAIResponsesRuntimeValues runtime;
-    std::uint64_t sequence = 0;
-    int next_output_index  = 0;
-    int reasoning_index    = -1;
-    int message_index      = -1;
-    bool started           = false;
-    bool reasoning_started = false;
-    bool reasoning_done    = false;
-    bool message_started   = false;
-    bool message_done      = false;
-    bool finish_built      = false;
-    bool terminal_emitted  = false;
+    std::uint64_t sequence                  = 0;
+    int next_output_index                   = 0;
+    int reasoning_index                     = -1;
+    int message_index                       = -1;
+    bool started                            = false;
+    bool reasoning_started                  = false;
+    bool reasoning_done                     = false;
+    bool message_started                    = false;
+    bool message_done                       = false;
+    bool finish_built                       = false;
+    bool terminal_emitted                   = false;
+    bool progress_seen                      = false;
+    std::uint32_t last_progress_tokens      = 0;
+    std::uint64_t last_progress_elapsed_ns  = 0;
     std::string reasoning_text;
     std::string content_text;
     ItemIds ids;
@@ -391,6 +394,34 @@ std::vector<std::string> OpenAIResponsesEventStream::content_delta(const std::st
                                                             {"delta", text},
                                                             {"logprobs", Json::array()}})));
     return events;
+}
+
+// Repeats response.in_progress, the one event the schema already defines for
+// "accepted, still working", carrying the prefill counters alongside it. A
+// client that does not know the field ignores it and still sees the stream
+// stay alive; one that does can show the wait it is actually in.
+std::vector<std::string> OpenAIResponsesEventStream::prompt_progress(
+    const ninfer::PromptProgress& progress) {
+    if (!impl_->started || impl_->finish_built || impl_->terminal_emitted) {
+        return {};
+    }
+    if (impl_->progress_seen &&
+        (progress.processed_prompt_tokens < impl_->last_progress_tokens ||
+         progress.elapsed_ns < impl_->last_progress_elapsed_ns)) {
+        throw std::logic_error("Responses prompt progress is not cumulative");
+    }
+    impl_->progress_seen          = true;
+    impl_->last_progress_tokens   = progress.processed_prompt_tokens;
+    impl_->last_progress_elapsed_ns = progress.elapsed_ns;
+    const Json payload{
+        {"response",
+         in_progress_response(impl_->id, impl_->created_at, impl_->request, impl_->runtime)},
+        {"prompt_progress",
+         Json{{"total", progress.total_prompt_tokens},
+              {"cache", progress.reused_prompt_tokens},
+              {"processed", progress.processed_prompt_tokens},
+              {"time_ms", progress.elapsed_ns / 1000000ULL}}}};
+    return {sse(impl_->event("response.in_progress", std::move(payload)))};
 }
 
 OpenAIResponsesStreamFinish OpenAIResponsesEventStream::finish(const GenerationOutcome& outcome) {
