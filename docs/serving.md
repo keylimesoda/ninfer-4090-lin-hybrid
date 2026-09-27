@@ -66,6 +66,9 @@ omitted at startup.
 | `POST /v1/messages/count_tokens` | checkpoint-native expanded input-token count |
 | `GET /slots` | per-slot occupancy from the Engine lane table: processing/retained, depths, `session_digest` |
 | `POST /slots/{id}?action=save\|restore\|erase` | session persistence; requires `--slot-save-path` |
+| `GET /metrics` | Prometheus counters: throughput, energy, scheduler, and cache totals |
+| `GET /telemetry` | one complete live snapshot: board sensors, scheduler occupancy with the execution-thread split, context-cache fill against configured capacities, per-slot occupancy, and the VRAM budget |
+| `GET /events` | Server-Sent Events carrying the records `--request-log-jsonl` writes, byte-identical; a late subscriber is replayed the retained `server_start` plus a bounded backlog, and a stalled subscriber drops its oldest records rather than backpressure the engine |
 
 ### Session persistence
 
@@ -823,6 +826,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--media-preprocess-threads N` | bounded media preprocessing workers; `0` selects at most 16 from host concurrency | `0` |
 | `--request-log-jsonl FILE` | append full-precision server/request records | disabled |
 | `--slot-save-path DIR` | enable `/slots/{id}?action=save\|restore\|erase` session persistence into DIR | disabled |
+| `--web-dir DIR` | serve the built dashboard from `DIR` at the server root (SPA; registered API routes always take precedence); see [dashboard.md](dashboard.md) | disabled |
 | `--turn-checkpoints N` | retained turn checkpoints per slot for mid-history prompt reuse; see [turn-checkpoint-ring.md](turn-checkpoint-ring.md) | `0` |
 | `--auto-save-evicted` | spill an involuntarily evicted session back to its bound slot file; requires `--slot-save-path` | off |
 | `--response-store-max-records N` | maximum locally retained Responses objects | `1024` |

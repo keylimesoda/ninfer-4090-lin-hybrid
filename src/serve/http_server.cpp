@@ -13,8 +13,11 @@
 #include <chrono>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -42,6 +45,15 @@ bool is_anthropic_path(std::string_view path) { return path.starts_with("/v1/mes
 bool is_openai_path(std::string_view path) {
     return path.starts_with("/v1/") && !is_anthropic_path(path);
 }
+bool is_api_path(const std::string& path) {
+    static constexpr std::string_view kPrefixes[] = {"/v1/",     "/slots",     "/metrics",
+                                                     "/health",  "/telemetry", "/events"};
+    for (const std::string_view prefix : kPrefixes) {
+        if (path.rfind(prefix, 0) == 0) { return true; }
+    }
+    return false;
+}
+
 
 void ensure_openai_request_id(const httplib::Request& request, httplib::Response& response) {
     if (is_openai_path(request.path) && !response.has_header("x-request-id")) {
@@ -246,6 +258,21 @@ httplib::Server::HandlerResponse handle_unrendered_http_error(const ServeOptions
                                                               httplib::Response& response) {
     ensure_openai_request_id(request, response);
     if (!response.body.empty()) { return httplib::Server::HandlerResponse::Unhandled; }
+    // Single-page dashboard fallback. Registered API routes are matched before mount points, so
+    // a 404 on a GET that is not an API path is a client-side route: serve the shell and let
+    // the app resolve it. Reached only when --web-dir is configured.
+    if (response.status == 404 && request.method == "GET" && !options.web_dir.empty() &&
+        !is_api_path(request.path)) {
+        std::ifstream shell(std::filesystem::path(options.web_dir) / "index.html",
+                            std::ios::binary);
+        if (shell) {
+            std::ostringstream body;
+            body << shell.rdbuf();
+            response.status = 200;
+            response.set_content(body.str(), "text/html");
+            return httplib::Server::HandlerResponse::Handled;
+        }
+    }
 
     ApiError error;
     if (response.status == 413) {
@@ -700,6 +727,20 @@ void HttpServer::register_routes() {
     server_.Post("/v1/messages", [this](const httplib::Request& req, httplib::Response& res) {
         handle_messages(req, res);
     });
+
+    // Mount points are consulted only after every route above misses, so serving the dashboard
+    // cannot shadow an API path. Hashed asset filenames are immutable; the shell is not.
+    if (!options_.web_dir.empty()) {
+        server_.set_file_extension_and_mimetype_mapping("webmanifest", "application/manifest+json");
+        server_.set_mount_point("/", options_.web_dir);
+        server_.set_file_request_handler(
+            [](const httplib::Request& req, httplib::Response& res) {
+                res.set_header("Cache-Control",
+                               req.path.rfind("/assets/", 0) == 0
+                                   ? "public, max-age=31536000, immutable"
+                                   : "no-cache");
+            });
+    }
 }
 
 void HttpServer::handle_telemetry(const httplib::Request&, httplib::Response& res) const {
