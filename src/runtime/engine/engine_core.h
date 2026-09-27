@@ -10,6 +10,7 @@
 #include "runtime/engine/resource_manager.h"
 #include "runtime/engine/scheduler.h"
 #include "runtime/generation/generation_budget.h"
+#include "runtime/generation/row_commit.h"
 #include "targets/qwen3_6/export/ninfer/targets/qwen3_6/runtime.h"
 
 #include <algorithm>
@@ -1331,6 +1332,10 @@ private:
         if (row_count == 0 || row_count != pending.row_count() || pending.row_stride() == 0 ||
             (!pending.row_counts().empty() && pending.row_counts().size() != row_count) ||
             pending.tokens().size() < static_cast<std::size_t>(pending.row_stride()) * row_count) {
+            const std::string detail = "lanes " + std::to_string(row_count) +
+                                       ", row_count " + std::to_string(pending.row_count()) +
+                                       ", row_stride " + std::to_string(pending.row_stride()) +
+                                       ", tokens " + std::to_string(pending.tokens().size());
             const auto discarded = instance_.program->abort_pending(std::move(pending));
             std::array<LaneId, kMaximumConcurrency> invalid_lanes{};
             for (std::size_t row = 0; row < row_count; ++row) {
@@ -1338,7 +1343,7 @@ private:
             }
             resources_.apply_discard(std::span<const LaneId>(invalid_lanes.data(), row_count),
                                      discarded);
-            throw std::logic_error("pending batch returned an invalid ragged layout");
+            throw RoundFault("pending batch returned an invalid ragged layout: " + detail);
         }
 
         std::array<LaneId, kMaximumConcurrency> lanes{};
@@ -1378,7 +1383,10 @@ private:
                 const std::int32_t raw_count =
                     pending.row_counts().empty() ? 1 : pending.row_counts()[row];
                 if (raw_count <= 0 || raw_count > static_cast<std::int32_t>(pending.row_stride())) {
-                    throw std::logic_error("pending row has an invalid licensed extent");
+                    throw RoundFault("pending row has an invalid licensed extent: lane " +
+                                     std::to_string(lane) + ", row " + std::to_string(row) +
+                                     ", raw_count " + std::to_string(raw_count) +
+                                     ", row_stride " + std::to_string(pending.row_stride()));
                 }
                 const std::uint32_t count = static_cast<std::uint32_t>(raw_count);
                 const auto row_tokens     = pending.tokens().subspan(row * pending.row_stride(),
@@ -1402,7 +1410,19 @@ private:
                     (decision.prefix_execution_split_after &&
                      (*decision.prefix_execution_split_after == 0 ||
                       *decision.prefix_execution_split_after > decision.accepted_tokens))) {
-                    throw std::logic_error("output policy returned an invalid licensed prefix");
+                    throw RoundFault("output policy returned an invalid licensed prefix: lane " +
+                                     std::to_string(lane) + ", row " + std::to_string(row) +
+                                     ", accepted " + std::to_string(decision.accepted_tokens) +
+                                     ", produced " + std::to_string(count) + ", terminal " +
+                                     (decision.finished() ? "yes" : "no"));
+                }
+                if (!row_commit_is_licensed(false, decision.accepted_tokens, count,
+                                            decision.finished())) {
+                    throw RoundFault("output policy returned an unlicensed row commit: lane " +
+                                     std::to_string(lane) + ", row " + std::to_string(row) +
+                                     ", accepted " + std::to_string(decision.accepted_tokens) +
+                                     ", produced " + std::to_string(count) + ", terminal " +
+                                     (decision.finished() ? "yes" : "no"));
                 }
                 decisions[row] = CommitDecision{
                     .accepted_tokens              = decision.accepted_tokens,
@@ -2225,6 +2245,38 @@ private:
         publish_runtime_stats();
     }
 
+    // Abandon the in-flight round without retiring the executor. A fault that says the round
+    // being resolved disagrees with itself (a row its output policy did not license, an
+    // invalid batch layout) says nothing about the device or the scheduler, so the requests
+    // the round was serving fail, their lanes are released, and queued work keeps running.
+    // Every other exception escaping the worker loop still retires the engine: a lost device
+    // context genuinely does invalidate it.
+    void fail_round_locked(std::exception_ptr error) noexcept {
+        ++cumulative_stats_.decode_rounds_abandoned;
+        const std::shared_ptr<Request> materializing_request =
+            materializing_ ? materializing_->request : nullptr;
+        materializing_.reset();
+        if (materializing_request != nullptr && materializing_request->sequence) {
+            (void)instance_.program->abort(*materializing_request->sequence);
+        }
+        std::array<LaneId, kMaximumConcurrency> released{};
+        std::size_t released_count = 0;
+        for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
+            if (slots_[lane] == nullptr) { continue; }
+            const std::shared_ptr<Request> request = slots_[lane];
+            if (request->sequence) { (void)instance_.program->abort(*request->sequence); }
+            complete_error(request, error);
+            slots_[lane].reset();
+            released[released_count++] = LaneId{lane};
+        }
+        if (materializing_request != nullptr) { complete_error(materializing_request, error); }
+        if (released_count != 0) {
+            resources_.release_failed_commit(
+                std::span<const LaneId>(released.data(), released_count));
+        }
+        publish_runtime_stats();
+    }
+
     void worker_loop() noexcept {
         bool previous_unit_was_decode = false;
         for (;;) {
@@ -2311,6 +2363,14 @@ private:
                 }
                 set_host_work_class(HostWorkClass::Control);
                 finish_engine_phase(boundary, EngineHostPhase::Boundary);
+            } catch (const RoundFault&) {
+                const std::exception_ptr error = std::current_exception();
+                HostPhaseMeasurement cleanup   = begin_host_phase();
+                fail_round_locked(error);
+                finish_engine_phase(cleanup, EngineHostPhase::Maintenance);
+                try {
+                    publish_runtime_stats();
+                } catch (...) {}
             } catch (...) {
                 const std::exception_ptr error = std::current_exception();
                 HostPhaseMeasurement cleanup   = begin_host_phase();

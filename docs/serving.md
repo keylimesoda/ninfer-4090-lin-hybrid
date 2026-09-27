@@ -996,6 +996,22 @@ capacity returns HTTP 429 with code `server_overloaded`. The absolute
 waiting, and returns HTTP 503 with code `request_queue_timeout` if admission does not occur in time.
 There is no admission ETA or unbounded overflow queue.
 
+### Abandoned rounds
+
+Each round resolves its lanes into licensed prefixes: how many of the tokens a lane produced are
+committed, and whether the request ends there. Only a cancelled lane may commit nothing; every
+other lane commits at least one token, and only a terminating lane may commit fewer than all of
+them. A round whose rows disagree with the state that produced them is abandoned rather than
+folded: the requests it was serving fail with an internal error, their lanes are released, and
+the server keeps accepting work, including the retry a client is about to send.
+
+The `decode_rounds_abandoned` counter in `/telemetry` reports how often this happened. It is zero
+on a healthy server; any sustained rate is a generation-state bug. The offending round's error
+carries the lane, the committed and produced counts, and the terminal and cancelled flags, so the
+next occurrence is diagnosable from the structured request log rather than merely fatal. Faults
+that outlive a round, such as a lost device context, still retire the engine, after which every
+request is rejected with `503 service_unavailable` until the process is restarted.
+
 Input memory is bounded by the outstanding-request count and the per-request
 `--max-request-mib` limit. Media requests additionally share one preparation permit, so a waiting
 media request retains the same cancellation and timeout deadline. Model output is bounded by the

@@ -677,6 +677,7 @@ void HttpServer::handle_telemetry(const httplib::Request&, httplib::Response& re
         {"active_captures_aborted", stats.active_captures_aborted},
         {"decode_rounds", stats.decode_rounds},
         {"decode_row_rounds", stats.decode_row_rounds},
+        {"decode_rounds_abandoned", stats.decode_rounds_abandoned},
         {"computed_prefill_tokens", stats.computed_prefill_tokens},
         {"committed_decode_tokens", stats.committed_decode_tokens},
         {"prefill_seconds_total", stats.prefill_seconds_total},

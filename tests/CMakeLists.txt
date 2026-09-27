@@ -210,6 +210,9 @@ ninfer_add_test(ninfer_slot_spill_guard_test
 ninfer_add_test(ninfer_request_log_test
   SOURCES test_request_log.cpp
   LIBRARIES ninfer_serve)
+ninfer_add_test(ninfer_row_commit_test
+  SOURCES test_row_commit.cpp
+  LIBRARIES ninfer_core)
 ninfer_add_test(ninfer_host_timing_test
   SOURCES test_host_timing.cpp
   LIBRARIES ninfer_core)

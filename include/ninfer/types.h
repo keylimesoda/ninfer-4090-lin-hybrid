@@ -550,6 +550,15 @@ private:
     RequestErrorKind kind_;
 };
 
+// A fault inside one in-flight round: the round's requests fail and their lanes are released,
+// but the engine keeps serving. Everything else reaching the worker loop's catch-all still
+// retires the executor: a lost device context genuinely invalidates it, so only faults
+// classified as round-local get round-scoped recovery.
+class RoundFault final : public std::logic_error {
+public:
+    explicit RoundFault(std::string message) : std::logic_error(std::move(message)) {}
+};
+
 struct PromptSummary {
     std::uint32_t prompt_tokens = 0;
     bool has_media              = false;
@@ -965,6 +974,10 @@ struct RuntimeStats {
     // Decode batch executions and the sum of their batch sizes.
     std::uint64_t decode_rounds             = 0;
     std::uint64_t decode_row_rounds         = 0;
+    // Decode rounds abandoned after a RoundFault: their requests failed, their lanes were
+    // released, and the engine kept serving. Zero on a healthy engine; a sustained rate is a
+    // generation-state bug.
+    std::uint64_t decode_rounds_abandoned     = 0;
     std::uint32_t running_requests          = 0;
     std::uint32_t prefilling_requests       = 0;
     std::uint32_t decode_ready_requests     = 0;
