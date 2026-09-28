@@ -143,21 +143,21 @@ a client that does not parse error events sees a stream that ends without a
 `finish_reason`. See [docs/serving.md](docs/serving.md) for the full queue
 contract.
 
-### Default production: text-only DFlash2 K7 at 172K
+### Default production: text-only MTP3 at 262K
 
-The RTX 4090 production profile uses the pinned DFlash2 companion artifact, CUDA Graph decode,
-and a K7 proposal window. The full serving process admits 176128 tokens (172K) with 134 MiB
-planned slack. Vision is disabled in this profile. The 262K MTP configuration below remains the
-full-context option.
+The RTX 4090 production profile uses MTP3, CUDA Graph decode, and the model's full native
+262144-token context. Vision is disabled because its residency prevents this capacity from
+admitting. DFlash2 remains available as a text-only, structured-output profile at 172K, but its
+low acceptance on long, tool-heavy agent histories makes it unsuitable as the interactive default.
 
 ```bash
-ninfer-serve models/qwen3_8_27b_dflash2.ninfer \
+ninfer-serve models/qwen3_8_27b.ninfer \
   --host 0.0.0.0 --port 8080 \
-  --max-context 176128 --kv-capacity 176128 \
+  --max-context 262144 --kv-capacity 262144 \
   --max-concurrency 1 --max-pending-requests 16 \
   --pending-timeout-ms 600000 \
   --prefill-chunk 1024 --kv-dtype rk4v4-e8 \
-  --spec dflash2 --draft-tokens 7 --lm-head-draft \
+  --spec mtp --draft-tokens 3 --lm-head-draft \
   --preserve-thinking
 ```
 

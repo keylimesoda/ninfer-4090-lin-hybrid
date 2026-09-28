@@ -65,17 +65,14 @@ ported.
 
 ## Current production profile
 
-The validated RTX 4090 default is text-only DFlash2 K7 with CUDA Graph decode and an explicit
-176128-token KV capacity. It uses the pinned DFlash2 companion artifact at revision
-`dc370fb6295a`; the full serve process retains 134 MiB planned VRAM slack. Vision is opt-in:
-enabling it requires a smaller context capacity and its own admission test.
-
-The 262144-token MTP profile remains a rollback option for workloads that need the model's full
-native context capacity.
+The validated RTX 4090 default is text-only MTP3 with CUDA Graph decode and an explicit
+262144-token KV capacity. Vision is opt-in because enabling it prevents this full capacity from
+admitting. DFlash2 K7 remains available for bounded structured-output workloads, but it reduced
+acceptance and queue performance on long, tool-heavy agent histories.
 
 ## Cutover procedure
 
-The hybrid image's `CMD` is the DFlash2 production profile above. It listens on
+The hybrid image's `CMD` is the MTP3 production profile above. It listens on
 `127.0.0.1:8080`, uses `--max-concurrency 1` and `--pending-timeout-ms 600000`, and includes
 the request log and dashboard. The named `ninfer-continuations` volume remains mounted at
 `/var/cache/ninfer`.
