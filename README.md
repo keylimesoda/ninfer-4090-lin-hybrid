@@ -41,7 +41,7 @@ production cutover record are in [docs/hybrid-cutover.md](docs/hybrid-cutover.md
 
 The Dockerfile bakes the model in (sha256-verified against the artifact table below), builds the
 dashboard to `/opt/ninfer/web`, and defaults to a production command line: the 262K MTP3 profile
-with `--vision`, `--request-log-jsonl`, and `--web-dir /opt/ninfer/web`. Running the image with
+with `--request-log-jsonl` and `--web-dir /opt/ninfer/web`. Running the image with
 no command starts that; the root URL of the server is the dashboard, on the same port as the
 API.
 
@@ -148,7 +148,7 @@ NINFER_MODEL_DIR="$PWD/models" bash scripts/download-qwen38.sh
 This repository's Dockerfile additionally bakes the model into the image (copying it from
 `models/` when present, otherwise downloading it and verifying the sha256 above) and builds the
 observability dashboard into `/opt/ninfer/web`. Its default command is the production profile:
-the 262K MTP3 line with `--vision`, `--request-log-jsonl`, and `--web-dir /opt/ninfer/web`, so
+the 262K MTP3 line with `--request-log-jsonl` and `--web-dir /opt/ninfer/web`, so
 `docker run` with no command serves the API at `http://127.0.0.1:8080/v1` and the dashboard at
 `http://127.0.0.1:8080/`. The profiles below override that default.
 
