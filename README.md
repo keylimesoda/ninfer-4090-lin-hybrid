@@ -9,7 +9,41 @@ speculative decoding, reasoning-effort control, and ReplaySSM state transactions
 
 This fork targets `sm_89` and Linux. Blackwell-only NVFP4/W4A4 execution is unavailable; the
 engine uses the same groupwise-int path as the 3090 base. The Windows path and the
-Qwen3.6-35B-A3B target are inherited but untested on the RTX 4090.
+Qwen3.6-35B-A3B target are inherited but untested on the RTX 4090. This repository
+(`ninfer-4090-lin-hybrid`) is a further hybrid of that base with the observability layer of the
+[tensorninja/ninfer-4090](https://github.com/tensorninja/ninfer-4090) fork, re-landed on the
+upstream engine; its purpose is a single-RTX-4090 Qwen3.8-27B production deployment that is also
+first-class observable. See [this fork: the observability hybrid](#this-fork-the-observability-hybrid).
+
+## This fork: the observability hybrid
+
+The base repository is the `sm_89` port described below; this repository adds the observability
+work of the tensorninja fork on top of it, re-landed commit by commit on the upstream engine so
+that upstream wins every engine-behavior conflict and the ported features are purely additive.
+
+| Layer | What it adds |
+|---|---|
+| INT8 tensor-core prefill routes (A8) | the tensorninja fork's A8 prefill routes for dense-body GEMMs, re-landed on this base's op structure |
+| Live telemetry | `GET /telemetry`: one complete snapshot — board sensors with decoded throttle reasons, scheduler occupancy with the execution-thread wall-clock split, context-cache fill against its configured capacities, per-slot occupancy, and the VRAM budget |
+| Event stream | `GET /events`: SSE carrying the records `--request-log-jsonl` writes, byte-identical; a late subscriber is replayed the retained `server_start` plus a bounded backlog |
+| Board energy | board joules from the GPU's own counter, attributed to prefill, decode, and idle across `/metrics`, `/telemetry`, per-request records, and CLI output; boards without the counter degrade to absent readings |
+| Decode-round fault recovery | a decode round discarded by a device fault is abandoned and the engine keeps serving, instead of retiring the process |
+| Responses prefill progress | `response.in_progress` carries a `prompt_progress` object (`total`/`cache`/`processed`/`time_ms`) while a Response streams |
+| Web dashboard | `apps/web`, a single-page dashboard over `/telemetry` and `/events` with JSONL replay, served by the engine itself through `--web-dir DIR` (same origin as the API) and built in the Dockerfile's own Bun stage |
+
+The frontend follows the engine's own payloads — schema-21 records and the upstream telemetry
+shapes — not the fork's: upstream's context cache is one device/host store, so the fork's
+adapter-inventory and L1/L2/L3 churn concepts are not ported (there is no upstream surface for
+them to observe), and the cache panel shows the upstream model instead. Panel-by-panel meaning,
+the energy mathematics, and the replay semantics are documented in
+[docs/dashboard.md](docs/dashboard.md); the port history, verification evidence, and the
+production cutover record are in [docs/hybrid-cutover.md](docs/hybrid-cutover.md).
+
+The Dockerfile bakes the model in (sha256-verified against the artifact table below), builds the
+dashboard to `/opt/ninfer/web`, and defaults to a production command line: the 262K MTP3 profile
+with `--vision`, `--request-log-jsonl`, and `--web-dir /opt/ninfer/web`. Running the image with
+no command starts that; the root URL of the server is the dashboard, on the same port as the
+API.
 
 ## Measured results on the RTX 4090
 
@@ -110,6 +144,13 @@ Build the image and download the model once:
 docker build --tag ninfer-4090:sm89 .
 NINFER_MODEL_DIR="$PWD/models" bash scripts/download-qwen38.sh
 ```
+
+This repository's Dockerfile additionally bakes the model into the image (copying it from
+`models/` when present, otherwise downloading it and verifying the sha256 above) and builds the
+observability dashboard into `/opt/ninfer/web`. Its default command is the production profile:
+the 262K MTP3 line with `--vision`, `--request-log-jsonl`, and `--web-dir /opt/ninfer/web`, so
+`docker run` with no command serves the API at `http://127.0.0.1:8080/v1` and the dashboard at
+`http://127.0.0.1:8080/`. The profiles below override that default.
 
 Then start one of the three profiles. The API is available at `http://127.0.0.1:8080/v1`.
 
@@ -442,7 +483,11 @@ defaults come from the model card and switch with the thinking mode: `temperatur
 
 OpenAI Chat Completions, OpenAI Responses with streaming and local continuation state, Anthropic
 Messages, prompt-rendered function tools with parsed tool calls, compatible-prefix reuse, and
-JSONL request logs. See [HTTP serving](docs/serving.md) and [CLI usage](docs/cli.md).
+JSONL request logs. On the same port, the observability surface added by this fork: `GET
+/telemetry` (live snapshot), `GET /events` (SSE record stream), `GET /metrics` (Prometheus),
+and the dashboard at the server root when started with `--web-dir`. See
+[HTTP serving](docs/serving.md), [CLI usage](docs/cli.md), and
+[the dashboard guide](docs/dashboard.md).
 
 ## Upstream and credits
 
@@ -460,6 +505,12 @@ JSONL request logs. See [HTTP serving](docs/serving.md) and [CLI usage](docs/cli
 - [jram4/ninfer-4090](https://github.com/jram4/ninfer-4090) - an earlier RTX 4090 port of a July
   2026 snapshot. Its Ada dispatch tuning targets a kernel organization that upstream has since
   replaced, so this fork starts from the current 3090 base instead.
+- [tensorninja/ninfer-4090](https://github.com/tensorninja/ninfer-4090) - the source of this
+  repository's observability layer: the A8 prefill routes, `/telemetry` and `/events`, board
+  energy attribution, decode-round fault recovery, Responses prefill progress, and the
+  `apps/web` dashboard. Re-landed on the upstream engine as described in
+  [docs/hybrid-cutover.md](docs/hybrid-cutover.md); their fork-specific surfaces (adapter
+  inventory, L1/L2/L3 continuation cache) are not part of this port.
 
 ## Support
 
