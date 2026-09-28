@@ -35,6 +35,7 @@ COPY CMakeLists.txt ./
 # invalidate this cached CUDA layer on every dashboard edit.
 COPY apps/CMakeLists.txt apps/
 COPY apps/cli/ apps/cli/
+COPY apps/perplexity/ apps/perplexity/
 COPY apps/serve/ apps/serve/
 COPY include/ include/
 COPY src/ src/
@@ -74,19 +75,21 @@ RUN apt-get update \
 # minor-version compatibility, which is what an RTX 3090/3090 Ti/4090 needs.
 RUN rm -rf /usr/local/cuda-13.1/compat /usr/local/cuda-13/compat /usr/local/cuda/compat
 
-ARG MODEL_URL=https://huggingface.co/neroued/Qwen3.8-27B-NInfer/resolve/main/qwen3_8_27b.ninfer
+ARG MODEL_URL=https://huggingface.co/neroued/Qwen3.8-27B-NInfer/resolve/dc370fb6295ae8b786e1af4f90d7142a16255c35/qwen3_8_27b.ninfer
+ARG MODEL_CONTEXT_PATH=models/qwen3_8_27b_dflash2.ninfer
+ARG MODEL_SHA256=0634abb07024221de141456cf04a42ab74b18bc38e1b781c6eb2e062a467eec3
 # Keep immutable model bytes below the frequently changing application layers.
 RUN --mount=type=bind,source=.,target=/context,readonly \
     mkdir -p /opt/ninfer/models \
-    && if [ -f /context/models/qwen3_8_27b.ninfer ]; then \
-         cp /context/models/qwen3_8_27b.ninfer /opt/ninfer/models/qwen3_8_27b.ninfer; \
+    && if [ -f "/context/${MODEL_CONTEXT_PATH}" ]; then \
+         cp "/context/${MODEL_CONTEXT_PATH}" /opt/ninfer/models/qwen3_8_27b.ninfer; \
        else \
          curl --fail --location --retry 5 \
            --output /opt/ninfer/models/qwen3_8_27b.ninfer \
            "$MODEL_URL"; \
        fi \
     && printf '%s  %s\n' \
-         eec39564993d6e9c7d5e383382a760f093465c9d163ec9a1bd6b80199514bf3e \
+         "$MODEL_SHA256" \
          /opt/ninfer/models/qwen3_8_27b.ninfer \
        | sha256sum --check
 
@@ -99,7 +102,7 @@ EXPOSE 8080
 STOPSIGNAL SIGTERM
 VOLUME ["/var/cache/ninfer"]
 
-# Mirrors the production 4090 command line, fork-only continuation-cache flags removed, with the
-# request log (so a later dashboard replay exists) and --web-dir (the dashboard at the server
-# root, same-origin with /telemetry and /events).
-CMD ["ninfer-serve", "/opt/ninfer/models/qwen3_8_27b.ninfer", "--model-id", "qwen3.8-27b", "--host", "0.0.0.0", "--port", "8080", "--max-context", "262144", "--kv-capacity", "262144", "--max-concurrency", "1", "--max-pending-requests", "16", "--pending-timeout-ms", "600000", "--prefill-chunk", "1024", "--kv-dtype", "rk4v4-e8", "--spec", "mtp", "--draft-tokens", "3", "--lm-head-draft", "--no-cuda-graph", "--vision", "--preserve-thinking", "--request-log-jsonl", "/var/cache/ninfer/request-log.jsonl", "--web-dir", "/opt/ninfer/web"]
+# Production RTX 4090 profile: the DFlash2 companion artifact, K7 proposal window and CUDA
+# Graph decode. 176128 tokens leaves 134 MiB planned slack in the complete serving process;
+# vision stays opt-in because its workspace would require a materially smaller context budget.
+CMD ["ninfer-serve", "/opt/ninfer/models/qwen3_8_27b.ninfer", "--model-id", "qwen3.8-27b", "--host", "0.0.0.0", "--port", "8080", "--max-context", "176128", "--kv-capacity", "176128", "--max-concurrency", "1", "--max-pending-requests", "16", "--pending-timeout-ms", "600000", "--prefill-chunk", "1024", "--kv-dtype", "rk4v4-e8", "--spec", "dflash2", "--draft-tokens", "7", "--lm-head-draft", "--preserve-thinking", "--request-log-jsonl", "/var/cache/ninfer/request-log.jsonl", "--web-dir", "/opt/ninfer/web"]

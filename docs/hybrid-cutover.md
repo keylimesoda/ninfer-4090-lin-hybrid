@@ -63,13 +63,22 @@ ported.
 - Fork's `docs/performance.md` energy sections: fork-specific report genre; upstream's
   performance docs are unchanged.
 
+## Current production profile
+
+The validated RTX 4090 default is text-only DFlash2 K7 with CUDA Graph decode and an explicit
+176128-token KV capacity. It uses the pinned DFlash2 companion artifact at revision
+`dc370fb6295a`; the full serve process retains 134 MiB planned VRAM slack. Vision is opt-in:
+enabling it requires a smaller context capacity and its own admission test.
+
+The 262144-token MTP profile remains a rollback option for workloads that need the model's full
+native context capacity.
+
 ## Cutover procedure
 
-The current production container (`ninfer-qwen`, image `ninfer-4090:sm89`) listens on
-`127.0.0.1:8080` with `--max-concurrency 1`, `--pending-timeout-ms 600000`,
-`--no-cuda-graph`, `--vision`, model `/opt/ninfer/models/qwen3_8_27b.ninfer`, volume
-`ninfer-continuations` on `/var/cache/ninfer`. The hybrid image's `CMD` reproduces exactly
-that, minus the fork-only cache flags, plus `--request-log-jsonl` and `--web-dir`.
+The hybrid image's `CMD` is the DFlash2 production profile above. It listens on
+`127.0.0.1:8080`, uses `--max-concurrency 1` and `--pending-timeout-ms 600000`, and includes
+the request log and dashboard. The named `ninfer-continuations` volume remains mounted at
+`/var/cache/ninfer`.
 
 One-step cutover from the repository root:
 

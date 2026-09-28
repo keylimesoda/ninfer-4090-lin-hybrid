@@ -31,3 +31,9 @@ models
 *.qus
 *.safetensors
 *.sqlite
+
+# Preserve the explicitly supported pre-staged production artifacts. These exceptions must
+# follow *.ninfer: Docker applies ignore patterns in order.
+!models/
+!models/qwen3_8_27b.ninfer
+!models/qwen3_8_27b_dflash2.ninfer

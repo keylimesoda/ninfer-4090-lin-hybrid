@@ -143,7 +143,25 @@ a client that does not parse error events sees a stream that ends without a
 `finish_reason`. See [docs/serving.md](docs/serving.md) for the full queue
 contract.
 
-### Text-only, full 262K native context (E8 4-bit KV, default)
+### Default production: text-only DFlash2 K7 at 172K
+
+The RTX 4090 production profile uses the pinned DFlash2 companion artifact, CUDA Graph decode,
+and a K7 proposal window. The full serving process admits 176128 tokens (172K) with 134 MiB
+planned slack. Vision is disabled in this profile. The 262K MTP configuration below remains the
+full-context option.
+
+```bash
+ninfer-serve models/qwen3_8_27b_dflash2.ninfer \
+  --host 0.0.0.0 --port 8080 \
+  --max-context 176128 --kv-capacity 176128 \
+  --max-concurrency 1 --max-pending-requests 16 \
+  --pending-timeout-ms 600000 \
+  --prefill-chunk 1024 --kv-dtype rk4v4-e8 \
+  --spec dflash2 --draft-tokens 7 --lm-head-draft \
+  --preserve-thinking
+```
+
+### Text-only, full 262K native context (E8 4-bit KV, MTP option)
 
 The E8 Conway-Sloane lattice KV mode (`rk4v4-e8`, ported from
 [UDPSendToFailed/ninfer-4090](https://github.com/UDPSendToFailed/ninfer-4090); see
