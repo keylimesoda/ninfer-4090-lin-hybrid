@@ -69,3 +69,22 @@ The corpus name is a workload scale, not an exact token count. Exact input and s
 are runtime results from the current artifact tokenizer and are recorded in each report. Reports
 contain unrounded NLL/PPL values for every window, stream, domain, and the token-weighted overall
 aggregate.
+
+## KL divergence against a lovelace-kld reference
+
+`ninfer-kld` scores the artifact against a base file written by lovelace's `lovelace-kld base`
+(sparse top-64 reference distributions over recorded agent turns; format in lovelace
+`eval/kld/README.md`) and writes the JSON schema of `lovelace-kld compare`: KL(P_base || Q) over
+the base top-k plus a tail bucket, top-1 agreement, and next-token NLL, per window, depth bucket,
+and overall. It tokenizes each window as lovelace-kld does (context and reply separately, special
+tokens parsed) and aborts unless every window reproduces the base's token hash, scored-span start,
+and next-token ids. Q is the causal-scoring output: BF16 logits normalized over the token domain,
+which `Engine::score_tokens` hands to an optional `ScoreLogitsSink` tile by tile.
+
+```bash
+./build/apps/ninfer-kld models/qwen3_8_27b.ninfer \
+  --windows windows.jsonl --base base.bin --out result.json --kv-dtype rk4v4-e8
+```
+
+`--max-context` defaults to the longest selected window rounded up to 256; `--buckets` selects
+depth buckets of the base.

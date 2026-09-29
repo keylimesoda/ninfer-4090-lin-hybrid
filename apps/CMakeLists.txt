@@ -28,3 +28,12 @@ target_include_directories(ninfer-perplexity PRIVATE
   ${PROJECT_SOURCE_DIR}/third_party
   ${CMAKE_CURRENT_SOURCE_DIR}/perplexity)
 target_link_libraries(ninfer-perplexity PRIVATE ninfer_engine ninfer_product_logging)
+
+# Offline KL divergence against a lovelace-kld base file (lovelace eval/kld).
+add_executable(ninfer-kld kld/main.cpp)
+target_include_directories(ninfer-kld PRIVATE
+  ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/src
+  ${PROJECT_SOURCE_DIR}/third_party
+  ${CMAKE_CURRENT_SOURCE_DIR}/kld)
+target_link_libraries(ninfer-kld PRIVATE ninfer_engine ninfer_product_logging ${NINFER_CUDART_TARGET})

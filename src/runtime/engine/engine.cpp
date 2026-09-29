@@ -469,7 +469,8 @@ std::vector<TokenId> Engine::tokenize_text(std::string_view text) const {
         impl_->active);
 }
 
-std::vector<float> Engine::score_tokens(std::vector<TokenId> tokens, std::uint32_t first_target) {
+std::vector<float> Engine::score_tokens(std::vector<TokenId> tokens, std::uint32_t first_target,
+                                        const ScoreLogitsSink& logits_sink) {
     nvtx::ScopedRange score_range(nvtx::Name::Score, nvtx::Category::Scoring,
                                   static_cast<std::uint64_t>(tokens.size()));
     if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
@@ -489,7 +490,8 @@ std::vector<float> Engine::score_tokens(std::vector<TokenId> tokens, std::uint32
             using CoreState = std::remove_cvref_t<decltype(core)>;
             if constexpr (std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore27>> ||
                           std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore35>>) {
-                return core->score(std::move(prompt.impl_->value), first_target);
+                return core->score(std::move(prompt.impl_->value), first_target,
+                                   logits_sink ? &logits_sink : nullptr);
             } else {
                 throw std::logic_error("Engine scoring core is unavailable");
             }

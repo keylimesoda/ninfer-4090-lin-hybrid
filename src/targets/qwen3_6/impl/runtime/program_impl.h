@@ -1032,7 +1032,8 @@ ProgramImplCore::~ProgramImplCore() noexcept {
 }
 
 std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
-                                                 std::uint32_t first_target) {
+                                                 std::uint32_t first_target,
+                                                 const ScoreLogitsSink* logits_sink) {
     if (!causal_scoring || !score_hidden || !score_logprobs_host ||
         workspace_plan.causal_score == 0) {
         throw std::logic_error("Program was not constructed for causal scoring");
@@ -1079,6 +1080,8 @@ std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
     std::vector<TokenId> staged_targets;
     staged_targets.reserve(kCausalScoreTile);
     std::uint32_t staged_columns = 0;
+    // Host copy of one logits tile, allocated on the first flush that feeds logits_sink.
+    std::vector<std::uint16_t> host_logits;
 
     try {
         state = state_store->reserve_reset(device.stream);
@@ -1112,6 +1115,18 @@ std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
                                                     cudaMemcpyDeviceToHost, device.stream));
             device.synchronize();
             const auto* host = static_cast<const float*>(score_logprobs_host->data());
+            if (logits_sink != nullptr) {
+                host_logits.resize(static_cast<std::size_t>(TextConfig::output_rows) *
+                                   kCausalScoreTile);
+                CUDA_CHECK(cudaMemcpy(host_logits.data(), logits.data, logits.bytes(),
+                                      cudaMemcpyDeviceToHost));
+                (*logits_sink)(ScoreLogitsTile{
+                    .first_target_offset = static_cast<std::uint32_t>(output.size()),
+                    .columns             = staged_columns,
+                    .valid_rows          = static_cast<std::uint32_t>(TextConfig::token_domain),
+                    .physical_rows       = static_cast<std::uint32_t>(TextConfig::output_rows),
+                    .bf16                = host_logits.data()});
+            }
             output.insert(output.end(), host, host + staged_columns);
             staged_targets.clear();
             staged_columns = 0;

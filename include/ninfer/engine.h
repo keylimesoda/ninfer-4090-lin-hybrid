@@ -79,9 +79,11 @@ public:
     // Artifact-tokenizer raw-text encoding. No chat template or implicit special token is added.
     [[nodiscard]] std::vector<TokenId> tokenize_text(std::string_view text) const;
 
-    // Returns log p(tokens[i] | tokens[0..i)) for i in [first_target,tokens.size()).
+    // Returns log p(tokens[i] | tokens[0..i)) for i in [first_target,tokens.size()). A non-empty
+    // logits_sink also receives the full output logits of every scored position.
     [[nodiscard]] std::vector<float> score_tokens(std::vector<TokenId> tokens,
-                                                  std::uint32_t first_target);
+                                                  std::uint32_t first_target,
+                                                  const ScoreLogitsSink& logits_sink = {});
 
     [[nodiscard]] std::uint32_t count_tokens(PromptInput input,
                                              const PreparationControl& control = {}) const;

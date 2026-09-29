@@ -59,12 +59,15 @@ public:
     CausalScoreCore(const CausalScoreCore&)            = delete;
     CausalScoreCore& operator=(const CausalScoreCore&) = delete;
 
-    [[nodiscard]] std::vector<float> score(PreparedPrompt prompt, std::uint32_t first_target) {
+    // logits_sink, when non-null, must outlive the call; it runs on the scoring worker thread.
+    [[nodiscard]] std::vector<float> score(PreparedPrompt prompt, std::uint32_t first_target,
+                                           const ScoreLogitsSink* logits_sink = nullptr) {
         // One synchronous public call owns the sole job slot until its result is delivered.
         std::scoped_lock call_lock(call_mutex_);
         auto job                               = std::make_unique<Job>();
         job->prompt                            = std::move(prompt);
         job->first_target                      = first_target;
+        job->logits_sink                       = logits_sink;
         std::future<std::vector<float>> result = job->promise.get_future();
         {
             std::lock_guard queue_lock(queue_mutex_);
@@ -120,6 +123,7 @@ private:
     struct Job {
         PreparedPrompt prompt;
         std::uint32_t first_target = 0;
+        const ScoreLogitsSink* logits_sink = nullptr;
         std::promise<std::vector<float>> promise;
     };
 
@@ -139,8 +143,8 @@ private:
                 std::vector<float> result;
                 {
                     std::scoped_lock lock(execution_mutex_);
-                    result =
-                        instance_.program->causal_score(std::move(job->prompt), job->first_target);
+                    result = instance_.program->causal_score(std::move(job->prompt),
+                                                             job->first_target, job->logits_sink);
                 }
                 job->promise.set_value(std::move(result));
             } catch (...) {

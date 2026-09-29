@@ -44,6 +44,22 @@ enum class EnginePurpose : std::uint8_t {
     CausalScoring,
 };
 
+// One tile of causal-score output logits, as the scoring Program computes them: `columns`
+// consecutive scored positions starting at target offset `first_target_offset` (0 = the
+// distribution predicting tokens[first_target]). Each column is `physical_rows` BF16 values
+// (raw bits); only the first `valid_rows` form the token domain the engine normalizes over.
+struct ScoreLogitsTile {
+    std::uint32_t first_target_offset = 0;
+    std::uint32_t columns             = 0;
+    std::uint32_t valid_rows          = 0;
+    std::uint32_t physical_rows       = 0;
+    const std::uint16_t* bf16         = nullptr;
+};
+
+// Called on the scoring thread for each tile, in target order. The tile memory is valid only
+// for the duration of the call.
+using ScoreLogitsSink = std::function<void(const ScoreLogitsTile&)>;
+
 enum class KvCapacityMode : std::uint8_t {
     Explicit,
     Automatic,

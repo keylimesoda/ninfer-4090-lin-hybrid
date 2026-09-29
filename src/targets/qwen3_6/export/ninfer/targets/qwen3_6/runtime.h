@@ -906,7 +906,8 @@ public:
     [[nodiscard]] RequestBasePlan<Variant>
     plan_request(const PreparedPrompt& prompt, const runtime::ResolvedExecutionOptions& options);
     [[nodiscard]] std::vector<float> causal_score(PreparedPrompt&& prompt,
-                                                  std::uint32_t first_target);
+                                                  std::uint32_t first_target,
+                                                  const ScoreLogitsSink* logits_sink);
     [[nodiscard]] std::optional<AdmissionCandidate<Variant>>
     inspect_admission(const PreparedPrompt& prompt, const RequestBasePlan<Variant>& base,
                       runtime::LaneId destination, const ContinuationHandle<Variant>* source,
